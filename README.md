@@ -16,8 +16,6 @@ This Flask application allows you to create security groups in Entra ID through 
 2. **Entra ID Service Principal** with permissions to create security groups
 3. **Required Permissions for Service Principal**:
    - `Group.Create` (Application permission)
-   - `Group.ReadWrite.All` (Application permission)
-   - `Directory.ReadWrite.All` (Application permission)
 
 ## Setup Service Principal
 
@@ -42,7 +40,7 @@ This Flask application allows you to create security groups in Entra ID through 
 4. Grant required permissions:
 
    ```powershell
-   az ad app permission add --id <app-id> --api 00000003-0000-0000-c000-000000000000 --api-permissions bf7b1a76-6e77-406b-b258-bf5c7720e98f=Role 62a82d76-70ea-41e2-9197-370581804d09=Role 19dbc75e-c2e2-444c-a770-ec69d8559fc7=Role
+   az ad app permission add --id <app-id> --api 00000003-0000-0000-c000-000000000000 --api-permissions bf7b1a76-6e77-406b-b258-bf5c7720e98f=Role
    az ad app permission admin-consent --id <app-id>
    ```
 
