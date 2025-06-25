@@ -57,6 +57,10 @@ def get_graph_client():
             def post(self, endpoint, data):
                 url = f"{self.base_url}{endpoint}"
                 return self.session.post(url, data=data)
+                
+            def patch(self, endpoint, data):
+                url = f"{self.base_url}{endpoint}"
+                return self.session.patch(url, data=data)
         
         # Return the client instance
         return GraphClient(token)
@@ -64,8 +68,8 @@ def get_graph_client():
         logger.error(f"Error creating Graph client: {str(e)}")
         return None
 
-def create_security_group(group_name):
-    """Create a security group in Entra ID"""
+def create_security_group(group_name, owner_id=None):
+    """Create a security group in Entra ID and optionally add an owner"""
     try:
         graph_client = get_graph_client()
         if not graph_client:
@@ -80,14 +84,27 @@ def create_security_group(group_name):
             "groupTypes": []
         }
         
+        # Add owner during creation if provided
+        if owner_id:
+            group_data["owners@odata.bind"] = [f"https://graph.microsoft.com/v1.0/directoryObjects/{owner_id}"]
+        
         # Make the request to create the group
         endpoint = "/groups"
         response = graph_client.post(endpoint, json.dumps(group_data))
         
         if response.status_code == 201:
             result = response.json()
-            logger.info(f"Successfully created group: {group_name}, ID: {result.get('id', 'Unknown')}")
-            return True, f"Security group '{group_name}' created successfully"
+            group_id = result.get('id', 'Unknown')
+            logger.info(f"Successfully created group: {group_name}, ID: {group_id}")
+            
+            # If owner_id was provided but not set during creation, add as owner separately
+            if owner_id and "owners@odata.bind" not in group_data:
+                add_owner_success = add_group_owner(group_id, owner_id)
+                if not add_owner_success:
+                    logger.warning(f"Group created but failed to add owner {owner_id}")
+            
+            owner_msg = f" with owner {owner_id}" if owner_id else ""
+            return True, f"Security group '{group_name}' created successfully{owner_msg}"
         else:
             logger.error(f"Failed to create group. Status code: {response.status_code}, Response: {response.text}")
             return False, f"Failed to create group: {response.text}"
@@ -95,6 +112,60 @@ def create_security_group(group_name):
     except Exception as e:
         logger.error(f"Error creating group: {str(e)}")
         return False, f"Error creating group: {str(e)}"
+
+def add_group_owner(group_id, owner_id):
+    """Add an owner to an existing group"""
+    try:
+        graph_client = get_graph_client()
+        if not graph_client:
+            logger.error("Failed to initialize Graph client for adding owner")
+            return False
+        
+        # Prepare the owner data
+        owner_data = {
+            "@odata.id": f"https://graph.microsoft.com/v1.0/directoryObjects/{owner_id}"
+        }
+        
+        # Add owner to the group
+        endpoint = f"/groups/{group_id}/owners/$ref"
+        response = graph_client.post(endpoint, json.dumps(owner_data))
+        
+        if response.status_code == 204:
+            logger.info(f"Successfully added owner {owner_id} to group {group_id}")
+            return True
+        else:
+            logger.error(f"Failed to add owner. Status code: {response.status_code}, Response: {response.text}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error adding group owner: {str(e)}")
+        return False
+
+def get_current_user_id():
+    """Get current user's object ID from EasyAuth headers"""
+    try:
+        # EasyAuth provides user information in headers
+        user_id = request.headers.get('X-MS-CLIENT-PRINCIPAL-ID')
+        if user_id:
+            logger.info(f"Retrieved user ID from EasyAuth: {user_id}")
+            return user_id
+        
+        # Fallback: Parse the X-MS-CLIENT-PRINCIPAL header if available
+        principal_header = request.headers.get('X-MS-CLIENT-PRINCIPAL')
+        if principal_header:
+            import base64
+            decoded = base64.b64decode(principal_header).decode('utf-8')
+            principal_data = json.loads(decoded)
+            user_id = principal_data.get('oid') or principal_data.get('sub')
+            if user_id:
+                logger.info(f"Retrieved user ID from principal header: {user_id}")
+                return user_id
+        
+        logger.warning("No user ID found in EasyAuth headers")
+        return None
+    except Exception as e:
+        logger.error(f"Error extracting user ID from EasyAuth: {str(e)}")
+        return None
 
 @app.route('/')
 def index():
@@ -115,8 +186,14 @@ def create_group_route():
         flash('Group name must be between 1 and 64 characters', 'error')
         return redirect(url_for('index'))
     
-    # Create the group
-    success, message = create_security_group(group_name)
+    # Get current authenticated user ID from EasyAuth
+    current_user_id = get_current_user_id()
+    if not current_user_id:
+        logger.warning("Could not retrieve current user ID from EasyAuth headers")
+        flash('Warning: Could not determine current user. Group will be created without owner.', 'warning')
+    
+    # Create the group with current user as owner
+    success, message = create_security_group(group_name, current_user_id)
     
     if success:
         flash(message, 'success')
